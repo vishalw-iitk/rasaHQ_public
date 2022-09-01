@@ -1,26 +1,26 @@
 from __future__ import annotations
 import logging
+from rasa.nlu.featurizers.dense_featurizer.dense_featurizer import DenseFeaturizer
 import typing
 import warnings
-from typing import Any, Dict, List, Optional, Text, Tuple
+from typing import Any, Dict, List, Optional, Text, Tuple, Type
 
 import numpy as np
 
 import rasa.shared.utils.io
 import rasa.utils.io as io_utils
 from rasa.engine.graph import GraphComponent, ExecutionContext
+from rasa.engine.recipes.default_recipe import DefaultV1Recipe
 from rasa.engine.storage.resource import Resource
 from rasa.engine.storage.storage import ModelStorage
 from rasa.shared.constants import DOCS_URL_TRAINING_DATA_NLU
 from rasa.nlu.classifiers import LABEL_RANKING_LENGTH
+from rasa.shared.exceptions import RasaException
 from rasa.shared.nlu.constants import TEXT
+from rasa.nlu.classifiers.classifier import IntentClassifier
 from rasa.shared.nlu.training_data.training_data import TrainingData
 from rasa.shared.nlu.training_data.message import Message
-
-from rasa.nlu.classifiers._sklearn_intent_classifier import SklearnIntentClassifier
-
-# This is a workaround around until we have all components migrated to `GraphComponent`.
-SklearnIntentClassifier = SklearnIntentClassifier
+from rasa.utils.tensorflow.constants import FEATURIZERS
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,16 @@ if typing.TYPE_CHECKING:
     import sklearn
 
 
-class SklearnIntentClassifierGraphComponent(GraphComponent):
+@DefaultV1Recipe.register(
+    DefaultV1Recipe.ComponentType.INTENT_CLASSIFIER, is_trainable=True
+)
+class SklearnIntentClassifier(GraphComponent, IntentClassifier):
     """Intent classifier using the sklearn framework."""
+
+    @classmethod
+    def required_components(cls) -> List[Type]:
+        """Components that should be included in the pipeline before this component."""
+        return [DenseFeaturizer]
 
     @staticmethod
     def get_default_config() -> Dict[Text, Any]:
@@ -56,7 +64,7 @@ class SklearnIntentClassifierGraphComponent(GraphComponent):
         config: Dict[Text, Any],
         model_storage: ModelStorage,
         resource: Resource,
-        clf: "sklearn.model_selection.GridSearchCV" = None,
+        clf: Optional["sklearn.model_selection.GridSearchCV"] = None,
         le: Optional["sklearn.preprocessing.LabelEncoder"] = None,
     ) -> None:
         """Construct a new intent classifier using the sklearn framework."""
@@ -79,7 +87,7 @@ class SklearnIntentClassifierGraphComponent(GraphComponent):
         model_storage: ModelStorage,
         resource: Resource,
         execution_context: ExecutionContext,
-    ) -> SklearnIntentClassifierGraphComponent:
+    ) -> SklearnIntentClassifier:
         """Creates a new untrained component (see parent class for full docstring)."""
         return cls(config, model_storage, resource)
 
@@ -118,11 +126,15 @@ class SklearnIntentClassifierGraphComponent(GraphComponent):
             return self._resource
 
         y = self.transform_labels_str2num(labels)
+        training_examples = [
+            message
+            for message in training_data.intent_examples
+            if message.features_present(
+                attribute=TEXT, featurizers=self.component_config.get(FEATURIZERS)
+            )
+        ]
         X = np.stack(
-            [
-                self._get_sentence_features(example)
-                for example in training_data.intent_examples
-            ]
+            [self._get_sentence_features(example) for example in training_examples]
         )
         # reduce dimensionality
         X = np.reshape(X, (len(X), -1))
@@ -151,7 +163,10 @@ class SklearnIntentClassifierGraphComponent(GraphComponent):
 
     def _num_cv_splits(self, y: np.ndarray) -> int:
         folds = self.component_config["max_cross_validation_folds"]
-        return max(2, min(folds, np.min(np.bincount(y)) // 5))
+        # [numpy-upgrade] type ignore can be removed after upgrading to numpy 1.23
+        return max(
+            2, min(folds, np.min(np.bincount(y)) // 5)  # type: ignore[no-untyped-call]
+        )
 
     def _create_classifier(
         self, num_threads: int, y: np.ndarray
@@ -184,9 +199,12 @@ class SklearnIntentClassifierGraphComponent(GraphComponent):
     def process(self, messages: List[Message]) -> List[Message]:
         """Return the most likely intent and its probability for a message."""
         for message in messages:
-            if not self.clf:
+            if self.clf is None or not message.features_present(
+                attribute=TEXT, featurizers=self.component_config.get(FEATURIZERS)
+            ):
                 # component is either not trained or didn't
-                # receive enough training data
+                # receive enough training data or the input doesn't
+                # have required features.
                 intent = None
                 intent_ranking = []
             else:
@@ -226,6 +244,11 @@ class SklearnIntentClassifierGraphComponent(GraphComponent):
         :param X: bow of input text
         :return: vector of probabilities containing one entry for each label.
         """
+        if self.clf is None:
+            raise RasaException(
+                "Sklearn intent classifier has not been initialised and trained."
+            )
+
         return self.clf.predict_proba(X)
 
     def predict(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -240,7 +263,11 @@ class SklearnIntentClassifierGraphComponent(GraphComponent):
         pred_result = self.predict_prob(X)
         # sort the probabilities retrieving the indices of
         # the elements in sorted order
-        sorted_indices = np.fliplr(np.argsort(pred_result, axis=1))
+
+        # [numpy-upgrade] type ignore can be removed after upgrading to numpy 1.23
+        sorted_indices = np.fliplr(  # type: ignore[no-untyped-call]
+            np.argsort(pred_result, axis=1)
+        )
         return sorted_indices, pred_result[:, sorted_indices]
 
     def persist(self) -> None:
@@ -262,7 +289,7 @@ class SklearnIntentClassifierGraphComponent(GraphComponent):
         resource: Resource,
         execution_context: ExecutionContext,
         **kwargs: Any,
-    ) -> SklearnIntentClassifierGraphComponent:
+    ) -> SklearnIntentClassifier:
         """Loads trained component (see parent class for full docstring)."""
         from sklearn.preprocessing import LabelEncoder
 
@@ -279,9 +306,9 @@ class SklearnIntentClassifierGraphComponent(GraphComponent):
                     encoder = LabelEncoder()
                     encoder.classes_ = classes
 
-                    return cls(config, model_storage, resource, classifier, encoder,)
+                    return cls(config, model_storage, resource, classifier, encoder)
         except ValueError:
-            logger.warning(
+            logger.debug(
                 f"Failed to load '{cls.__name__}' from model storage. Resource "
                 f"'{resource.name}' doesn't exist."
             )

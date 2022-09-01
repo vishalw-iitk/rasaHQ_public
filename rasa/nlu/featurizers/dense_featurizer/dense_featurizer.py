@@ -2,12 +2,12 @@ from abc import ABC
 from typing import Text
 import numpy as np
 
-from rasa.nlu.featurizers.featurizer import Featurizer2
+from rasa.nlu.featurizers.featurizer import Featurizer
 from rasa.utils.tensorflow.constants import MEAN_POOLING, MAX_POOLING
 from rasa.shared.exceptions import InvalidConfigException
 
 
-class DenseFeaturizer2(Featurizer2[np.ndarray], ABC):
+class DenseFeaturizer(Featurizer[np.ndarray], ABC):
     """Base class for all dense featurizers."""
 
     @staticmethod
@@ -48,7 +48,10 @@ class DenseFeaturizer2(Featurizer2[np.ndarray], ABC):
         if pooling_operation == MEAN_POOLING:
             return np.mean(dense_sequence_features, axis=0, keepdims=True)
         elif pooling_operation == MAX_POOLING:
-            return np.max(dense_sequence_features, axis=0, keepdims=True)
+            # [numpy-upgrade] type ignore can be removed after upgrading to numpy 1.23
+            return np.max(
+                dense_sequence_features, axis=0, keepdims=True
+            )  # type: ignore[no-untyped-call]
         else:
             raise InvalidConfigException(
                 f"Invalid pooling operation specified. Available operations are "

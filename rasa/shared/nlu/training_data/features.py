@@ -98,8 +98,8 @@ class Features:
                 f"Cannot combine dense features as sequence dimensions do not "
                 f"match: {self.features.ndim} != {additional_features.features.ndim}."
             )
-
-        self.features = np.concatenate(
+        # [numpy-upgrade] type ignore can be removed after upgrading to numpy 1.23
+        self.features = np.concatenate(  # type: ignore[no-untyped-call]
             (self.features, additional_features.features), axis=-1
         )
 
@@ -149,7 +149,7 @@ class Features:
     def fingerprint(self) -> Text:
         """Calculate a stable string fingerprint for the features."""
         if self.is_dense():
-            f_as_text = self.features.tostring()
+            f_as_text = self.features.tobytes()
         else:
             f_as_text = rasa.shared.nlu.training_data.util.sparse_matrix_to_string(
                 self.features
@@ -205,7 +205,7 @@ class Features:
 
     @staticmethod
     def groupby_attribute(
-        features_list: List[Features], attributes: Optional[Iterable[Text]] = None,
+        features_list: List[Features], attributes: Optional[Iterable[Text]] = None
     ) -> Dict[Text, List[Features]]:
         """Groups the given features according to their attribute.
 
@@ -236,7 +236,7 @@ class Features:
 
     @staticmethod
     def combine(
-        features_list: List[Features], expected_origins: Optional[List[Text]] = None,
+        features_list: List[Features], expected_origins: Optional[List[Text]] = None
     ) -> Features:
         """Combine features of the same type and level that describe the same attribute.
 
@@ -280,22 +280,12 @@ class Features:
                 ):
                     if expected != actual:
                         raise ValueError(
-                            f"Expected {expected} to be the origin of the {idx}-th "
+                            f"Expected '{expected}' to be the origin of the {idx}-th "
                             f"feature (because of `origin_of_combination`) but found a "
-                            f"feature from {actual}."
+                            f"feature from '{actual}'."
                         )
-        else:
-            origins: Set[Tuple[Text]] = set(
-                tuple(f.origin) if not isinstance(f.origin, Text) else (f.origin,)
-                for f in features_list
-            )
-            if len(origins) > 1:
-                raise ValueError(
-                    f"Expected all Features to have the same origin "
-                    f"found the following origins: {origins}."
-                )
         # (2) attributes (is_sparse, type, attribute) must coincide
-        # Note: we could also use `filter` for this check, but then the erorr msgs
+        # Note: we could also use `filter` for this check, but then the error msgs
         # aren't as nice.
         sparseness: Set[bool] = set(f.is_sparse() for f in features_list)
         if len(sparseness) > 1:
@@ -327,7 +317,10 @@ class Features:
         # Combine the features
         arbitrary_feature = features_list[0]
         if not arbitrary_feature.is_sparse():
-            features = np.concatenate([f.features for f in features_list], axis=-1)
+            # [numpy-upgrade] type ignore can be removed after upgrading to numpy 1.23
+            features = np.concatenate(  # type: ignore[no-untyped-call]
+                [f.features for f in features_list], axis=-1
+            )
         else:
             features = scipy.sparse.hstack([f.features for f in features_list])
         return Features(
@@ -366,16 +359,16 @@ class Features:
             )
         output = []
         for is_sparse in [True, False]:
-            # all sparse featues before all dense features
+            # all sparse features before all dense features
             for type in [FEATURE_TYPE_SEQUENCE, FEATURE_TYPE_SENTENCE]:
                 # sequence feature that is (not) sparse before sentence feature that is
-                #  (not) sparse
+                # (not) sparse
                 sublist = Features.filter(
-                    features_list=features_list, type=type, is_sparse=is_sparse,
+                    features_list=features_list, type=type, is_sparse=is_sparse
                 )
                 if sublist:
                     combined_feature = Features.combine(
-                        sublist, expected_origins=expected_origins,
+                        sublist, expected_origins=expected_origins
                     )
                     output.append(combined_feature)
         return output

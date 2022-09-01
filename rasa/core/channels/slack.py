@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 from http import HTTPStatus
@@ -41,16 +42,20 @@ class SlackBot(OutputChannel):
         super().__init__()
 
     async def _post_message(self, channel: Text, **kwargs: Any) -> None:
+        # type issues below are ignored because the `run_async` paramenter
+        # above ensures chat_postMessage is await-able. mypy complains
+        # because the type annotations are not precise enough in Slack
         if self.thread_id:
-            await self.client.chat_postMessage(
+            await self.client.chat_postMessage(  # type: ignore[misc]
                 channel=channel, **kwargs, thread_ts=self.thread_id
             )
         else:
-            await self.client.chat_postMessage(channel=channel, **kwargs)
+            await self.client.chat_postMessage(channel=channel, **kwargs)  # type: ignore[misc]  # noqa: E501
 
     async def send_text_message(
         self, recipient_id: Text, text: Text, **kwargs: Any
     ) -> None:
+        """Send text message to Slack API."""
         recipient = self.slack_channel or recipient_id
         for message_part in text.strip().split("\n\n"):
             await self._post_message(
@@ -67,9 +72,10 @@ class SlackBot(OutputChannel):
             channel=recipient, as_user=True, text=image, blocks=[image_block]
         )
 
-    async def send_attachment(
+    async def send_attachment(  # type: ignore[override]
         self, recipient_id: Text, attachment: Dict[Text, Any], **kwargs: Any
     ) -> None:
+        """Sends message with attachment."""
         recipient = self.slack_channel or recipient_id
         await self._post_message(
             channel=recipient, as_user=True, attachments=[attachment], **kwargs
@@ -93,15 +99,17 @@ class SlackBot(OutputChannel):
             )
             return await self.send_text_message(recipient, text, **kwargs)
 
-        button_block = {"type": "actions", "elements": []}
-        for button in buttons:
-            button_block["elements"].append(
+        button_block = {
+            "type": "actions",
+            "elements": [
                 {
                     "type": "button",
                     "text": {"type": "plain_text", "text": button["title"]},
                     "value": button["payload"],
                 }
-            )
+                for button in buttons
+            ],
+        }
 
         await self._post_message(
             channel=recipient,
@@ -139,6 +147,7 @@ class SlackInput(InputChannel):
             credentials.get("errors_ignore_retry", None),
             credentials.get("use_threads", False),
             credentials.get("slack_signing_secret", ""),
+            credentials.get("conversation_granularity", "sender"),
         )
 
     def __init__(
@@ -151,6 +160,7 @@ class SlackInput(InputChannel):
         errors_ignore_retry: Optional[List[Text]] = None,
         use_threads: Optional[bool] = False,
         slack_signing_secret: Text = "",
+        conversation_granularity: Optional[Text] = "sender",
     ) -> None:
         """Create a Slack input channel.
 
@@ -182,7 +192,10 @@ class SlackInput(InputChannel):
             slack_signing_secret: Slack creates a unique string for your app and
                 shares it with you. This allows us to verify requests from Slack
                 with confidence by verifying signatures using your signing secret.
-
+            conversation_granularity: conversation granularity for slack conversations.
+                sender allows 1 conversation per user (across channels)
+                channel allows 1 conversation per user per channel
+                thread allows 1 conversation per user per thread
         """
         self.slack_token = slack_token
         self.slack_channel = slack_channel
@@ -192,6 +205,7 @@ class SlackInput(InputChannel):
         self.retry_num_header = slack_retry_number_header
         self.use_threads = use_threads
         self.slack_signing_secret = slack_signing_secret
+        self.conversation_granularity = conversation_granularity
 
         self._validate_credentials()
 
@@ -258,9 +272,9 @@ class SlackInput(InputChannel):
             # can be adjusted to taste later if needed,
             # but is a good first approximation
             for regex, replacement in [
-                (fr"<@{uid_to_remove}>\s", ""),
-                (fr"\s<@{uid_to_remove}>", ""),  # a bit arbitrary but probably OK
-                (fr"<@{uid_to_remove}>", " "),
+                (rf"<@{uid_to_remove}>\s", ""),
+                (rf"\s<@{uid_to_remove}>", ""),  # a bit arbitrary but probably OK
+                (rf"<@{uid_to_remove}>", " "),
             ]:
                 text = re.sub(regex, replacement, text)
 
@@ -350,7 +364,7 @@ class SlackInput(InputChannel):
             )
 
             return response.text(
-                None, status=HTTPStatus.CREATED, headers={"X-Slack-No-Retry": 1}
+                "", status=HTTPStatus.CREATED, headers={"X-Slack-No-Retry": "1"}
             )
 
         if metadata is not None:
@@ -372,7 +386,7 @@ class SlackInput(InputChannel):
                 metadata=metadata,
             )
 
-            await on_new_message(user_msg)
+            asyncio.create_task(on_new_message(user_msg))
         except Exception as e:
             logger.error(f"Exception when trying to handle message.{e}")
             logger.error(str(e), exc_info=True)
@@ -506,6 +520,11 @@ class SlackInput(InputChannel):
                 user_message = event.get("text", "")
                 sender_id = event.get("user", "")
                 metadata = self.get_metadata(request)
+                channel_id = metadata.get("out_channel")
+                thread_id = metadata.get("thread_id")
+                conversation_id = self._get_conversation_id(
+                    sender_id, channel_id, thread_id
+                )
 
                 if "challenge" in output:
                     return response.json(output.get("challenge"))
@@ -528,7 +547,7 @@ class SlackInput(InputChannel):
                     request,
                     on_new_message,
                     text=self._sanitize_user_message(user_message, metadata["users"]),
-                    sender_id=sender_id,
+                    sender_id=conversation_id,
                     metadata=metadata,
                 )
             elif content_type == "application/x-www-form-urlencoded":
@@ -541,8 +560,13 @@ class SlackInput(InputChannel):
                     text = self._get_interactive_response(payload["actions"][0])
                     if text is not None:
                         metadata = self.get_metadata(request)
+                        channel_id = metadata.get("out_channel")
+                        thread_id = metadata.get("thread_id")
+                        conversation_id = self._get_conversation_id(
+                            sender_id, channel_id, thread_id
+                        )
                         return await self.process_message(
-                            request, on_new_message, text, sender_id, metadata
+                            request, on_new_message, text, conversation_id, metadata
                         )
                     if payload["actions"][0]["type"] == "button":
                         # link buttons don't have "value", don't send their clicks to
@@ -556,6 +580,24 @@ class SlackInput(InputChannel):
             return response.text("Bot message delivered.")
 
         return slack_webhook
+
+    def _get_conversation_id(
+        self,
+        sender_id: Optional[Text],
+        channel_id: Optional[Text],
+        thread_id: Optional[Text],
+    ) -> Optional[Text]:
+        conversation_id = sender_id
+        if self.conversation_granularity == "channel" and sender_id and channel_id:
+            conversation_id = sender_id + "_" + channel_id
+        if (
+            self.conversation_granularity == "thread"
+            and sender_id
+            and channel_id
+            and thread_id
+        ):
+            conversation_id = sender_id + "_" + channel_id + "_" + thread_id
+        return conversation_id
 
     def _is_supported_channel(self, slack_event: Dict, metadata: Dict) -> bool:
         return (

@@ -38,10 +38,19 @@ module.exports = {
             'tuning-your-model',
             'testing-your-assistant',
             'setting-up-ci-cd',
-            'how-to-deploy',
           ],
         },
         "glossary",
+      ],
+    },
+    {
+        type: 'category',
+        label: 'Deploying Assistants',
+        collapsed: true,
+      items: [
+        'deploy/introduction',
+        'deploy/deploy-rasa',
+        'deploy/deploy-action-server',
       ],
     },
     {
@@ -62,8 +71,10 @@ module.exports = {
             'model-configuration',
             'components',
             'policies',
+            'custom-graph-components',
             'training-data-importers',
             'language-support',
+            'graph-recipe',
           ],
         },
         {
@@ -75,6 +86,14 @@ module.exports = {
             'custom-actions',
             'forms',
             'default-actions',
+            'slot-validation-actions',
+          ],
+        },
+        {
+          type: 'category',
+          label: 'Evaluation',
+          items: [
+            'markers',
           ],
         },
         {
@@ -132,7 +151,12 @@ module.exports = {
       type: 'category',
       label: 'Change Log',
       collapsed: true,
-      items: ['changelog', 'migration-guide', 'actively-maintained-versions'],
+      items: ['changelog', 'migration-guide', 
+      {
+        type: 'link',
+        label: 'Actively Maintained Versions',
+        href: 'https://rasa.com/rasa-product-release-and-maintenance-policy/',
+      }]
     },
   ],
 };
