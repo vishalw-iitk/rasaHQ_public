@@ -89,12 +89,12 @@ def configure_app(
     endpoints: Optional[AvailableEndpoints] = None,
     log_file: Optional[Text] = None,
     conversation_id: Optional[Text] = uuid.uuid4().hex,
-    server_listeners: Optional[List[Tuple[Callable, Text]]] = None,
     use_syslog: bool = False,
     syslog_address: Optional[Text] = None,
     syslog_port: Optional[int] = None,
     syslog_protocol: Optional[Text] = None,
     request_timeout: Optional[int] = None,
+    server_listeners: Optional[List[Tuple[Callable, Text]]] = None,
 ) -> Sanic:
     """Run the agent."""
     rasa.core.utils.configure_file_logging(
@@ -171,12 +171,12 @@ def serve_application(
     ssl_ca_file: Optional[Text] = None,
     ssl_password: Optional[Text] = None,
     conversation_id: Optional[Text] = uuid.uuid4().hex,
-    server_listeners: Optional[List[Tuple[Callable, Text]]] = None,
     use_syslog: Optional[bool] = False,
     syslog_address: Optional[Text] = None,
     syslog_port: Optional[int] = None,
     syslog_protocol: Optional[Text] = None,
     request_timeout: Optional[int] = None,
+    server_listeners: Optional[List[Tuple[Callable, Text]]] = None,
 ) -> None:
     """Run the API entrypoint."""
     if not channel and not credentials:
@@ -196,12 +196,12 @@ def serve_application(
         endpoints=endpoints,
         log_file=log_file,
         conversation_id=conversation_id,
-        server_listeners=server_listeners,
         use_syslog=use_syslog,
         syslog_address=syslog_address,
         syslog_port=syslog_port,
         syslog_protocol=syslog_protocol,
         request_timeout=request_timeout,
+        server_listeners=server_listeners,
     )
 
     ssl_context = server.create_ssl_context(
